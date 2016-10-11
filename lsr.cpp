@@ -8,17 +8,19 @@
 #include <sys/time.h>
 #include <arpa/inet.h>
 
+#include <string>
+
 void die(std::string s){
 	fprintf(stderr, "%s\n", s.c_str());
 	exit(1);
 }
 
-int tryrecv(int s, char *buf, int bufsize, sockaddr_in *si_target, int us){
+int tryrecv(int s, char *buf, int bufsize, sockaddr_in *si_target, int usdelay){
 	//-2 timeout -1 error else returns length of output
 
 	timeval timeout;
 	memset((char*)&timeout, 0, sizeof(timeout));
-	timeout.tv_usec = us;
+	timeout.tv_usec = usdelay;
 	
 	fd_set readfds;
 
@@ -35,7 +37,6 @@ int tryrecv(int s, char *buf, int bufsize, sockaddr_in *si_target, int us){
 
 	memset(buf, 0, bufsize);
 	n = recvfrom(s, buf, bufsize, 0, NULL, NULL);
-	LogPacket(buf, "rcv");
 
 	return n;
 }
@@ -43,32 +44,32 @@ int tryrecv(int s, char *buf, int bufsize, sockaddr_in *si_target, int us){
 int main(int argc, char **argv){
 
 	if(argc != 4){
-		die("usage: sender receiver_host_ip receiver_port file.txt MWS MSS gamma pdrop pdelay Maxdelay seed");
+		die("usage: lsr node port config");
 	}
 
 	// Initialisation
 
-	sockaddr_in si_other;
+	sockaddr_in si_me;
 
-	int s, slen = sizeof(si_other);
+	int s, slen = sizeof(si_me);
 
 	if((s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) == -1){
 		die("socket");
 	}
 
-	memset((char*)&si_other, 0, sizeof(si_other));
+	memset((char*)&si_me, 0, slen);
 
-	si_other.sin_family = AF_INET;
-	si_other.sin_port = htons(atoi(argv[2]));
+	si_me.sin_family = AF_INET;
+	si_me.sin_port = htons(atoi(argv[2]));
 
-	if(!inet_aton(argv[1], &si_other.sin_addr)){
+	if(!inet_aton("127.0.0.1", &si_me.sin_addr)){
 		die("inet_aton");
+	}
+	
+	if(bind(s, (sockaddr*)&si_me, sizeof(si_me)) == -1){
+		die("bind");
 	}
 
 	close(s);
-	fclose(fin);
-	fclose(fout);
-	free(buf);
-
 	return 0;
 }
