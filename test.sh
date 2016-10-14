@@ -9,5 +9,6 @@
 
 sleep $1
 kill %"$3"
+kill %"$4"
 sleep $2
 kill $(jobs -p)
