@@ -7,21 +7,28 @@
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <arpa/inet.h>
+#include <cassert>
 
 #include <string>
 #include <vector>
 #include <utility>
 #include <queue>
+#include <stack>
 
-#define UPDATE_INTERVAL 1000
-#define ROUTE_UPDATE_INTERVAL 1200
+#define UPDATE_INTERVAL 100
+#define ROUTE_UPDATE_INTERVAL 3000
 #define MAX_NODES 26
+#define INFINITY 1.0/0.0
 
-struct packet{
+struct Header{
 	unsigned char id;
 	unsigned char seq;
-	unsigned char len;
-	std::pair<unsigned char, int> data[MAX_NODES];
+	int len;
+};
+
+struct Packet{
+	Header header;
+	std::pair<unsigned char, double> data[MAX_NODES];
 };
 
 void die(std::string s){
@@ -55,7 +62,6 @@ int tryrecv(int s, void *buf, int bufsize, int usdelay, sockaddr_in *si_other, i
 	return n;
 }
 
-
 void set_timer(timeval *tv){
 	gettimeofday(tv, 0);
 }
@@ -72,7 +78,7 @@ int get_timer(timeval *tv){
 	return out;
 }
 
-void broadcast(int s, void *buffer, int len, std::vector<unsigned short> neighbours, unsigned short exclusion){
+void broadcast(int s, Packet *buffer, std::vector<unsigned short> neighbours, unsigned short exclusion){
 	sockaddr_in si_other;
 	memset((char*)&si_other, 0, sizeof(si_other));
 
@@ -81,6 +87,9 @@ void broadcast(int s, void *buffer, int len, std::vector<unsigned short> neighbo
 	if(!inet_aton("127.0.0.1", &si_other.sin_addr)){
 		die("inet_aton");
 	}
+
+	int len = sizeof(Header) + (sizeof(std::pair<unsigned char, double>) * buffer->header.len);
+	assert(sizeof(Header) + (sizeof(std::pair<unsigned char, double>) * MAX_NODES) == sizeof(Packet));
 
 	for(int i = 0; i < (int)neighbours.size(); i++){
 		if(exclusion == neighbours[i]) continue;
@@ -120,11 +129,11 @@ int main(int argc, char **argv){
 
 	// General Initialisation
 	
-	packet link_state;
-	link_state.seq = 0;
-	link_state.id = argv[1][0] - 'A';
+	Packet link_state;
+	link_state.header.seq = 0;
+	link_state.header.id = argv[1][0] - 'A';
 
-	int matrix[MAX_NODES][MAX_NODES];
+	double matrix[MAX_NODES][MAX_NODES];
 	std::vector<unsigned short> neighbours;
 
 	for(int i = 0; i < MAX_NODES; i++){
@@ -133,16 +142,17 @@ int main(int argc, char **argv){
 
 	FILE *fin = fopen(argv[3], "r");
 
-	fscanf(fin, "%hhu\n", &link_state.len);
-	for(int i = 0; i < link_state.len; i++){
+	fscanf(fin, "%d\n", &link_state.header.len);
+	for(int i = 0; i < link_state.header.len; i++){
 		unsigned char id_other;
-		int cost, port;
+		double cost;
+		int port;
 
-		fscanf(fin, "%c %d %d\n", &id_other, &cost, &port);
+		fscanf(fin, "%c %lf %d\n", &id_other, &cost, &port);
 		id_other -= 'A';
 
 		neighbours.push_back(htons(port));
-		matrix[link_state.id][id_other] = matrix[id_other][link_state.id] = cost;
+		matrix[link_state.header.id][id_other] = matrix[id_other][link_state.header.id] = cost;
 
 		link_state.data[i].first = id_other;
 		link_state.data[i].second = cost;
@@ -153,9 +163,9 @@ int main(int argc, char **argv){
 	set_timer(&ui);
 	set_timer(&rui);
 
-	packet buffer;
-	unsigned char seen[26];
-	bool active[26];
+	Packet buffer;
+	unsigned char seen[MAX_NODES];
+	bool active[MAX_NODES];
 	memset(seen, 0, sizeof(seen));
 	memset(active, 0, sizeof(active));
 
@@ -164,8 +174,8 @@ int main(int argc, char **argv){
 		if(get_timer(&ui) >= UPDATE_INTERVAL){
 			// send out own link state 
 
-			broadcast(s, &link_state, sizeof(link_state), neighbours, 0);
-			link_state.seq++;
+			broadcast(s, &link_state, neighbours, 0);
+			link_state.header.seq++;
 			
 			set_timer(&ui);
 		}
@@ -174,66 +184,73 @@ int main(int argc, char **argv){
 			// TODO dijkstra
 
 			std::priority_queue<
-				std::pair<int, unsigned char>,
-				std::vector<std::pair<int, unsigned char> >,
-				std::greater<std::pair<int, unsigned char> > > pq;
+				std::pair<double, unsigned char>,
+				std::vector<std::pair<double, unsigned char> >,
+				std::greater<std::pair<double, unsigned char> > > pq;
 
-			unsigned char back[26];
-			unsigned int dist[26];
+			unsigned char back[MAX_NODES];
+			double dist[MAX_NODES];
 
 			memset(back, -1, sizeof(back));
-			memset(dist, -1, sizeof(dist));
+			for(int i = 0; i < MAX_NODES; i++){
+				dist[i] = INFINITY;
+			}
 
-			dist[link_state.id] = 0;
-			pq.push(std::make_pair(0, link_state.id));
+			dist[link_state.header.id] = 0.0;
+			pq.push(std::make_pair(0.0, link_state.header.id));
 			
 			while(!pq.empty()){
 				unsigned char cur = pq.top().second;
-				int curdist = pq.top().first;
+				double curdist = pq.top().first;
 				pq.pop();
 
-				if((unsigned int)curdist > dist[cur]) continue;
-				printf("%c %d\n", cur + 'A', curdist);
+				if(curdist > dist[cur]) continue;
 				
-				for(unsigned int i = 0; i < 26; i++){
-					if(matrix[cur][i] != -1 && (unsigned int)(matrix[cur][i] + curdist) < dist[i]){
+				for(unsigned int i = 0; i < MAX_NODES; i++){
+					if(matrix[cur][i] != -1 && (matrix[cur][i] + curdist) < dist[i]){
 						back[i] = cur;
 						dist[i] = matrix[cur][i] + curdist;
 						pq.push(std::make_pair(dist[i], i));
 					}
 				}
 			}
-			for(int i = 0; i < 26; i++){
-				if(back[i] != -1){
+			for(int i = 0; i < MAX_NODES; i++){
+				if(back[i] != 255){
 					printf("least-cost path to node %c: ", i + 'A');
 
 					int cur = i;
+					std::stack<unsigned char> revr;
 					do{
-						printf("%c", cur + 'A');
+						revr.push(cur);
 						cur = back[cur];
-					}while(cur != -1);
+					}while(cur != 255);
 
-					printf(" and the cost is %d\n", dist[cur]);
+					while(!revr.empty()){
+						printf("%c", revr.top() + 'A');
+						revr.pop();
+					}
+
+					printf(" and the cost is %f\n", dist[i]);
 				}
 			}
 
 			set_timer(&rui);
-			exit(0);
+			//exit(0);
 		}
 		
-		if(tryrecv(s, &buffer, sizeof(buffer), 100000, &si_other, &sleno) >= 0){
-			printf("%c received packet from %c...", link_state.id + 'A', buffer.id + 'A');
+		if(tryrecv(s, &buffer, sizeof(buffer), 10000, &si_other, &sleno) >= 0){
+			printf("%c received packet from %c seq #%d...", link_state.header.id+'A', buffer.header.id+'A', buffer.header.seq);
 
-			if(!active[buffer.id] || seen[buffer.id] - buffer.seq > 128){
+			if(!active[buffer.header.id] || (unsigned char)(seen[buffer.header.id] - buffer.header.seq) > 128){
 
-				for(int i = 0; i < buffer.len; i++){
-					matrix[buffer.data[i].first][buffer.id] = buffer.data[i].second;
-					matrix[buffer.id][buffer.data[i].first] = buffer.data[i].second;
+				for(int i = 0; i < buffer.header.len; i++){
+					matrix[buffer.data[i].first][buffer.header.id] = buffer.data[i].second;
+					matrix[buffer.header.id][buffer.data[i].first] = buffer.data[i].second;
 				}
 
-				broadcast(s, &buffer, sizeof(buffer), neighbours, si_other.sin_port);
-				seen[buffer.id] = buffer.seq;
-				active[buffer.id] = true;
+				broadcast(s, &buffer, neighbours, si_other.sin_port);
+				seen[buffer.header.id] = buffer.header.seq;
+				active[buffer.header.id] = true;
 
 				printf("forwarded\n");
 			}
