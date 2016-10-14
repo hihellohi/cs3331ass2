@@ -11,12 +11,17 @@
 
 #include <string>
 #include <vector>
+#include <map>
 #include <utility>
 #include <queue>
 #include <stack>
 
-#define UPDATE_INTERVAL 100
-#define ROUTE_UPDATE_INTERVAL 3000
+#define UPDATE_INTERVAL_RAW 1000
+#define ROUTE_UPDATE_INTERVAL_RAW 30000
+#define MULTIPLIER 10
+#define UPDATE_INTERVAL UPDATE_INTERVAL_RAW / MULTIPLIER
+#define ROUTE_UPDATE_INTERVAL ROUTE_UPDATE_INTERVAL_RAW / MULTIPLIER 
+
 #define MAX_NODES 26
 #define INFINITY 1.0/0.0
 
@@ -78,7 +83,7 @@ int get_timer(timeval *tv){
 	return out;
 }
 
-void broadcast(int s, Packet *buffer, std::vector<unsigned short> neighbours, unsigned short exclusion){
+void broadcast(int s, Packet *buffer, std::map<unsigned short, unsigned char> neighbours, unsigned short exclusion){
 	sockaddr_in si_other;
 	memset((char*)&si_other, 0, sizeof(si_other));
 
@@ -91,10 +96,10 @@ void broadcast(int s, Packet *buffer, std::vector<unsigned short> neighbours, un
 	int len = sizeof(Header) + (sizeof(std::pair<unsigned char, double>) * buffer->header.len);
 	assert(sizeof(Header) + (sizeof(std::pair<unsigned char, double>) * MAX_NODES) == sizeof(Packet));
 
-	for(int i = 0; i < (int)neighbours.size(); i++){
-		if(exclusion == neighbours[i]) continue;
+	for(std::map<unsigned short, unsigned char>::iterator i = neighbours.begin(); i != neighbours.end(); i++){
+		if(exclusion == i->first) continue;
 
-		si_other.sin_port = neighbours[i];
+		si_other.sin_port = i->first;
 		if(sendto(s, buffer, len, 0, (sockaddr*)&si_other, sizeof(si_other)) == -1){
 			die("sendto");
 		}
@@ -134,11 +139,12 @@ int main(int argc, char **argv){
 	link_state.header.id = argv[1][0] - 'A';
 
 	double matrix[MAX_NODES][MAX_NODES];
-	std::vector<unsigned short> neighbours;
+	std::map<unsigned short, unsigned char> neighbours;
+	std::vector<timeval> timeouts;
 
-	for(int i = 0; i < MAX_NODES; i++){
-		memset(matrix[i], -1, sizeof(matrix[i]));
-	}
+	for(int i = 0; i < MAX_NODES; i++)
+	for(int j = 0; j < MAX_NODES; j++)
+		matrix[i][j] = INFINITY;
 
 	FILE *fin = fopen(argv[3], "r");
 
@@ -151,8 +157,13 @@ int main(int argc, char **argv){
 		fscanf(fin, "%c %lf %d\n", &id_other, &cost, &port);
 		id_other -= 'A';
 
-		neighbours.push_back(htons(port));
+		//neighbours.push_back(htons(port));
+		neighbours[htons(port)] = i;
 		matrix[link_state.header.id][id_other] = matrix[id_other][link_state.header.id] = cost;
+		
+		timeval tmp;
+		set_timer(&tmp);
+		timeouts.push_back(tmp);
 
 		link_state.data[i].first = id_other;
 		link_state.data[i].second = cost;
@@ -207,7 +218,7 @@ int main(int argc, char **argv){
 				if(curdist > dist[cur]) continue;
 				
 				for(unsigned int i = 0; i < MAX_NODES; i++){
-					if(matrix[cur][i] != -1 && (matrix[cur][i] + curdist) < dist[i]){
+					if((matrix[cur][i] + curdist) < dist[i]){
 						back[i] = cur;
 						dist[i] = matrix[cur][i] + curdist;
 						pq.push(std::make_pair(dist[i], i));
@@ -239,7 +250,7 @@ int main(int argc, char **argv){
 		}
 		
 		if(tryrecv(s, &buffer, sizeof(buffer), 10000, &si_other, &sleno) >= 0){
-			printf("%c received packet from %c seq #%d...", link_state.header.id+'A', buffer.header.id+'A', buffer.header.seq);
+			//printf("%c received packet from %c seq #%d...", link_state.header.id+'A', buffer.header.id+'A', buffer.header.seq);
 
 			if(!active[buffer.header.id] || (unsigned char)(seen[buffer.header.id] - buffer.header.seq) > 128){
 
@@ -252,12 +263,23 @@ int main(int argc, char **argv){
 				seen[buffer.header.id] = buffer.header.seq;
 				active[buffer.header.id] = true;
 
-				printf("forwarded\n");
-			}
-			else{
-				printf("ignored\n");
+				set_timer(&timeouts[neighbours[si_other.sin_port]]);
 			}
 			fflush(stdout);
+		}
+
+		for(int i = 0; i < (int)timeouts.size(); i++){
+			unsigned char curid = link_state.data[i].first;
+			if(get_timer(&timeouts[i]) > UPDATE_INTERVAL * 5 && active[curid]){	
+
+				printf("node %c died!\n", curid + 'A');
+				link_state.data[i].second = INFINITY;
+				active[curid] = false;
+
+				for(int j = 0; j < MAX_NODES; j++){
+					matrix[curid][j] = matrix[j][curid] = INFINITY;
+				}
+			}
 		}
 	}
 

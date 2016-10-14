@@ -8,4 +8,6 @@
 ./Lsr F 2005 configF.txt > F &
 
 sleep $1
+kill %"$3"
+sleep $2
 kill $(jobs -p)
