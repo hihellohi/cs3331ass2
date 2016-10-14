@@ -9,17 +9,17 @@
 #include <arpa/inet.h>
 
 #include <string>
-#include <map>
 #include <vector>
 #include <utility>
+#include <queue>
 
 #define UPDATE_INTERVAL 1000
-#define ROUTE_UPDATE_INTERVAL 3000
+#define ROUTE_UPDATE_INTERVAL 1200
 #define MAX_NODES 26
 
 struct packet{
 	unsigned char id;
-	unsigned char parity;
+	unsigned char seq;
 	unsigned char len;
 	std::pair<unsigned char, int> data[MAX_NODES];
 };
@@ -29,7 +29,7 @@ void die(std::string s){
 	exit(1);
 }
 
-int tryrecv(int s, char *buf, int bufsize, int usdelay, sockaddr_in *si_other, int *slen){
+int tryrecv(int s, void *buf, int bufsize, int usdelay, sockaddr_in *si_other, int *slen){
 	//-2 timeout -1 error else returns length of output
 
 	timeval timeout;
@@ -72,6 +72,26 @@ int get_timer(timeval *tv){
 	return out;
 }
 
+void broadcast(int s, void *buffer, int len, std::vector<unsigned short> neighbours, unsigned short exclusion){
+	sockaddr_in si_other;
+	memset((char*)&si_other, 0, sizeof(si_other));
+
+	si_other.sin_family = AF_INET;
+
+	if(!inet_aton("127.0.0.1", &si_other.sin_addr)){
+		die("inet_aton");
+	}
+
+	for(int i = 0; i < (int)neighbours.size(); i++){
+		if(exclusion == neighbours[i]) continue;
+
+		si_other.sin_port = neighbours[i];
+		if(sendto(s, buffer, len, 0, (sockaddr*)&si_other, sizeof(si_other)) == -1){
+			die("sendto");
+		}
+	}
+}
+
 int main(int argc, char **argv){
 
 	if(argc != 4){
@@ -82,7 +102,7 @@ int main(int argc, char **argv){
 
 	sockaddr_in si_me, si_other;
 
-	int s, slenm = sizeof(si_me), sleno;
+	int s, slenm = sizeof(si_me), sleno = sizeof(si_other);
 
 	if((s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) == -1){
 		die("socket");
@@ -101,16 +121,14 @@ int main(int argc, char **argv){
 	// General Initialisation
 	
 	packet link_state;
-	link_state.parity = 0;
+	link_state.seq = 0;
 	link_state.id = argv[1][0] - 'A';
 
 	int matrix[MAX_NODES][MAX_NODES];
 	std::vector<unsigned short> neighbours;
 
 	for(int i = 0; i < MAX_NODES; i++){
-		for(int j = 0; j < MAX_NODES; j++){
-			matrix[i][j] = i == j ? 0 : -1;
-		}
+		memset(matrix[i], -1, sizeof(matrix[i]));
 	}
 
 	FILE *fin = fopen(argv[3], "r");
@@ -136,55 +154,93 @@ int main(int argc, char **argv){
 	set_timer(&rui);
 
 	packet buffer;
+	unsigned char seen[26];
+	bool active[26];
+	memset(seen, 0, sizeof(seen));
+	memset(active, 0, sizeof(active));
 
 	// Main loop
 	while(1){
 		if(get_timer(&ui) >= UPDATE_INTERVAL){
 			// send out own link state 
-			link_state.parity = !link_state.parity;
 
-			sleno = sizeof(si_other);
-			memset((char*)&si_other, 0, sizeof(si_other));
-
-			si_other.sin_family = AF_INET;
-
-			if(!inet_aton("127.0.0.1", &si_other.sin_addr)){
-				die("inet_aton");
-			}
-
-			for(int i = 0; i < (int)neighbours.size(); i++){
-
-				printf("%c sending to port %d\n", link_state.id + 'A', neighbours[i]);
-				fflush(stdout);
-				
-				si_other.sin_port = neighbours[i];
-				if(sendto(s, (void*)&link_state, sizeof(link_state), 0, (sockaddr*)&si_other, sleno) == -1){
-					die("sendto");
-				}
-			}
-
+			broadcast(s, &link_state, sizeof(link_state), neighbours, 0);
+			link_state.seq++;
+			
 			set_timer(&ui);
 		}
 
 		if(get_timer(&rui) >= ROUTE_UPDATE_INTERVAL){
 			// TODO dijkstra
-			for(int i = 0; i < MAX_NODES; i++){
-				for(int j = 0; j < MAX_NODES; j++)
-					printf("%2d ", matrix[i][j]);
-				printf("\n");
+
+			std::priority_queue<
+				std::pair<int, unsigned char>,
+				std::vector<std::pair<int, unsigned char> >,
+				std::greater<std::pair<int, unsigned char> > > pq;
+
+			unsigned char back[26];
+			unsigned int dist[26];
+
+			memset(back, -1, sizeof(back));
+			memset(dist, -1, sizeof(dist));
+
+			dist[link_state.id] = 0;
+			pq.push(std::make_pair(0, link_state.id));
+			
+			while(!pq.empty()){
+				unsigned char cur = pq.top().second;
+				int curdist = pq.top().first;
+				pq.pop();
+
+				if((unsigned int)curdist > dist[cur]) continue;
+				printf("%c %d\n", cur + 'A', curdist);
+				
+				for(unsigned int i = 0; i < 26; i++){
+					if(matrix[cur][i] != -1 && (unsigned int)(matrix[cur][i] + curdist) < dist[i]){
+						back[i] = cur;
+						dist[i] = matrix[cur][i] + curdist;
+						pq.push(std::make_pair(dist[i], i));
+					}
+				}
+			}
+			for(int i = 0; i < 26; i++){
+				if(back[i] != -1){
+					printf("least-cost path to node %c: ", i + 'A');
+
+					int cur = i;
+					do{
+						printf("%c", cur + 'A');
+						cur = back[cur];
+					}while(cur != -1);
+
+					printf(" and the cost is %d\n", dist[cur]);
+				}
 			}
 
 			set_timer(&rui);
 			exit(0);
 		}
 		
-		if(tryrecv(s, (char*)&buffer, sizeof(packet), 100000, &si_other, &sleno) >= 0){
-			printf("%c received packet from %c\n", link_state.id + 'A', buffer.id + 'A');
-			fflush(stdout);
-			for(int i = 0; i < buffer.len; i++){
-				matrix[buffer.data[i].first][buffer.id] = buffer.data[i].second;
-				matrix[buffer.id][buffer.data[i].first] = buffer.data[i].second;
+		if(tryrecv(s, &buffer, sizeof(buffer), 100000, &si_other, &sleno) >= 0){
+			printf("%c received packet from %c...", link_state.id + 'A', buffer.id + 'A');
+
+			if(!active[buffer.id] || seen[buffer.id] - buffer.seq > 128){
+
+				for(int i = 0; i < buffer.len; i++){
+					matrix[buffer.data[i].first][buffer.id] = buffer.data[i].second;
+					matrix[buffer.id][buffer.data[i].first] = buffer.data[i].second;
+				}
+
+				broadcast(s, &buffer, sizeof(buffer), neighbours, si_other.sin_port);
+				seen[buffer.id] = buffer.seq;
+				active[buffer.id] = true;
+
+				printf("forwarded\n");
 			}
+			else{
+				printf("ignored\n");
+			}
+			fflush(stdout);
 		}
 	}
 
