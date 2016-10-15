@@ -141,6 +141,7 @@ int main(int argc, char **argv){
 	double matrix[MAX_NODES][MAX_NODES];
 	std::map<unsigned short, unsigned char> neighbours;
 	std::vector<timeval> timeouts;
+	std::vector<unsigned short> keys;
 
 	for(int i = 0; i < MAX_NODES; i++)
 	for(int j = 0; j < MAX_NODES; j++)
@@ -152,13 +153,15 @@ int main(int argc, char **argv){
 	for(int i = 0; i < link_state.header.len; i++){
 		unsigned char id_other;
 		double cost;
-		int port;
+		unsigned short port;
 
-		fscanf(fin, "%c %lf %d\n", &id_other, &cost, &port);
+		fscanf(fin, "%c %lf %hu\n", &id_other, &cost, &port);
 		id_other -= 'A';
 
 		//neighbours.push_back(htons(port));
-		neighbours[htons(port)] = i;
+		port = htons(port);
+		neighbours[port] = i;
+		keys.push_back(port);
 		matrix[link_state.header.id][id_other] = matrix[id_other][link_state.header.id] = cost;
 		
 		timeval tmp;
@@ -268,7 +271,7 @@ int main(int argc, char **argv){
 			fflush(stdout);
 		}
 
-		for(int i = 0; i < (int)timeouts.size(); i++){
+		for(int i = 0; i < link_state.header.len; i++){
 			unsigned char curid = link_state.data[i].first;
 			if(get_timer(&timeouts[i]) > UPDATE_INTERVAL * 5 && active[curid]){	
 
@@ -279,6 +282,15 @@ int main(int argc, char **argv){
 				for(int j = 0; j < MAX_NODES; j++){
 					matrix[curid][j] = matrix[j][curid] = INFINITY;
 				}
+
+				neighbours.erase(keys[i]);
+
+//				for(std::map<unsigned short, unsigned char>::iterator it = neighbours.begin(); it != neighbours.end(); it++){
+//					if(it->second == curid){
+//						neighbours.erase(it);
+//						break;
+//					}
+//				}
 			}
 		}
 	}
