@@ -275,7 +275,7 @@ int main(int argc, char **argv){
 			unsigned char curid = link_state.data[i].first;
 			if(get_timer(&timeouts[i]) > UPDATE_INTERVAL * 5 && active[curid]){	
 
-				printf("node %c died!\n", curid + 'A');
+				//printf("node %c died!\n", curid + 'A');
 				link_state.data[i].second = INFINITY;
 				active[curid] = false;
 

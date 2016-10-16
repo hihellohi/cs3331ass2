@@ -1,13 +1,13 @@
 CC=g++
 CPPFLAGS=-Wall -Werror -g
-OBJS=lsr.o
+OBJS=Lsr.o
 
 all: Lsr
 
 Lsr : $(OBJS)
 	$(CC) -o Lsr $(OBJS)
 
-lsr.o : lsr.cpp
+Lsr.o : Lsr.cpp
 
 clean :
 	rm -f Lsr $(OBJS)

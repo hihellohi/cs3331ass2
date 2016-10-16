@@ -1,0 +1,98 @@
+\documentclass[a4paper]{article}
+
+\usepackage[english]{babel}
+\usepackage[UKenglish]{isodate}
+\usepackage[parfill]{parskip}
+\usepackage{float}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{csquotes}
+\usepackage{listings}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{enumerate}
+\usepackage{siunitx}
+\usepackage{appendix}
+
+\newcommand{\nth}{\textsuperscript}
+
+\title{Assignment 2 Report}
+\author{Kevin Zihong Ni\\\texttt{z5025098}}
+
+\begin{document}
+
+\maketitle
+
+My implementation of the link state routing protocol was written in C++ (as authorised by the lecturer Apro S. Kanhere
+over email). I chose to do this as C++, unlike C offers the standard template library, allowing the use of data structures such as
+maps and priority queues which would have required significant amounts of time investment to implement on my own. The code does 
+\textbf{not} require a C++11 compiler and works with the version of g++ installed on the CSE SSH servers. I have also included
+a makefile to aid in compilation.
+
+\section{Design Overview}
+
+The algorithm's initialisation only consists of setting up the socket and reading from the configuration file. The details of 
+the node's neighbour's (the link state) are stored in a "packet" data structure which can be easily be broadcasted when needed.
+
+
+The main loop of the algorithm can be broken up into 4 parts, mediated by a global timer: 
+\begin{enumerate}
+	\item Check the global timer against the last time this part was executed and send a packet containing the node's link state
+		to all of its neighbours when that value is greater than 1 second. 
+	\item Check the global timer against the last time this part was executed and perform a Dijkstra's Algorithm search on
+		the current graph.
+	\item Listen for new incoming packets, update the graph if needed and retransmit the packet to all neighbours except
+		for the one that the packet came from. Also keep a record of the last time a packet was 
+		received from a particular neighbour.
+	\item Look through the list of neighbours. If the last time one was heard is greater than 3 seconds, presume that node
+		had died.
+\end{enumerate}
+
+\section{Data Structures}
+
+\subsection{Packets}
+
+The C++ definition of the data structure I used to send link states between nodes is as follows:
+\begin{lstlisting}[language=C++]
+struct Header{
+	unsigned char id;
+	unsigned char seq;
+	int len;
+};
+
+struct Packet{
+	Header header;
+	std::pair<unsigned char, double> data[MAX_NODES];
+};
+\end{lstlisting}
+
+\verb|data| is an array of every neighbour of the node that originally created the packet and their cost.
+\verb|id| refers to the ID of the node that this packet originated from (\textbf{not} the node that last retransmitted the
+packet). This means that there is a link between \verb|id| and every node listed in \verb|data| (which also has its corresponding
+cost). \verb|seq| is a sequence number for the packet (used to prevent unnecessary retransmissions) and \verb|len| is the length 
+of the array \verb|data|.
+
+\subsection{Network Topology}
+The network topology was represented using a $26 \times 26$ adjacency matrix. The index of a node was simply the ASCII value of
+its designated letter minus the ASCII value of 'A'. Since there are only 26 letters, 26 was an acceptable size for the array.
+This data structure was chosen over others (such as adjacency lists) due to its relative simplicity and the small upper bound on 
+the size of the sample data.
+
+\section{Node Failures}
+Nodes keep track of the last time they have "heard" from each of its neighbours. If this value is ever more than 3 seconds behind
+the global clock (i.e. 3 missed packets), the corresponding neighbour is then presumed "dead" and measures can be taken to remove
+them from the graph. First, the cost of the link to that node is set to infinity in the link state packet. This is done instead
+of outright removing the entry since the other nodes need to be informed of the change in cost. The next time the node's link
+state is broadcast, the other nodes will automatically overwrite the existing costs of this edge with infinity on their own graphs
+upon receiving the packet. Second, the cost of every edge going to the dead node must also be set to infinity in the graph as the 
+automatic mechanism only applies to nodes receiving the packet. Lastly, the dead node must be removed from the list of neighbours
+so that network resources won't be wasted on attempting to contact a dead node.
+
+\section{Restricting Excessive Link State Broadcasts}
+Nodes keep an array of sequence numbers for each possible letter (even if they are not in the network). These sequence numbers
+correspond with the sequence numbers present on each packet. When a packet is received, its sequence number is checked against
+the recorded sequence number. If the number is "ahead" of the last recorded sequence number, then that packet is retransmitted
+to all of the node's neighbours except for the one that the packet was received from. If the sequence number is equal to or behind
+the recorded one, then the packet is discarded. Integer overflows can be accounted for by subtracting the two numbers and
+comparing the result against a constant.
+
+\end{document}
